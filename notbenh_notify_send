@@ -1,0 +1,102 @@
+# WeeChat pm and highlight notifications via notify-send
+#
+# license: GPL3
+# contact: notbenh@CPAN.org
+# history:
+#  0.1 start from notify-send from shmibs
+
+use strict;
+use warnings;
+use constant SCRIPT_NAME => 'notbenh_notify_send';
+
+weechat::register(SCRIPT_NAME, 'notbenh', '0.1', 'GPL3', 'actually do notifincations the way that I want, fork of notify-send by shmibs', '', '');
+
+# global var declarations
+my %pv_times;
+my %highlight_times;
+my %settings_default=(
+    #'wait_pm'        => [ '180', 'necessary time delay between private messages (seconds) for command to be executed' ],
+    #'wait_highlight' => [ '60', 'necessary time delay between highlights (seconds) for command to be executed' ],
+    'ignore_nicks'   => [ '', 'comma-separated list of nicks to ignore' ],
+    'command'        => [ q{notify-send}, ''],
+    'command-opts'   => [ q{--app-name=weechat}, ''],
+    'pm_urgency'     => [ q{--urgency=critical}, ''],
+    'pm_expire'      => [ q{--expire-time=1000}, ''],
+    'hl_urgency'     => [ q{}, ''],
+    'hl_expire'      => [ q{--expire-time=1000}, ''],
+    'summary'        => [ q{$name}, ''],
+    'notification'   => [ q{$message}, '' ], 
+);
+my %settings=();
+
+#------------------------------------[ START CONFIGURATION ]------------------------------------
+
+sub config_changed {
+    my ($pointer, $name, $value) = @_;
+    $name = substr($name, length("plugins.var.perl.".SCRIPT_NAME."."), length($name));
+    $settings{$name} = $value;
+    return weechat::WEECHAT_RC_OK;
+}
+
+sub config_init{
+  my $version = weechat::info_get("version_number", "") || 0;
+  foreach my $option (keys %settings_default) {
+    if (!weechat::config_is_set_plugin($option)) {
+      weechat::config_set_plugin($option, $settings_default{$option}[0]);
+      $settings{$option} = $settings_default{$option}[0];
+    } else {
+      $settings{$option} = weechat::config_get_plugin($option);
+    }
+    if ($version >= 0x00030500) {
+      weechat::config_set_desc_plugin($option, $settings_default{$option}[1]." (default: \"".$settings_default{$option}[0]."\")");
+    }
+  }
+}
+
+config_init();
+weechat::hook_config("plugins.var.perl.".SCRIPT_NAME.".*", "config_changed", "");
+
+#-------------------------------------[ END CONFIGURATION ]-------------------------------------
+
+my @signals=qw(weechat_pv weechat_highlight); #TODO: this really should be config
+
+# message received hook
+foreach(@signals) {
+  weechat::hook_signal($_,'new_notification','');
+}
+
+sub new_notification {
+  my $unknown = shift; # no clue what this first value is
+  my $type = shift eq 'weechat_pv' ? 'pm' : 'hl';
+  my ($name,$message) = split /\s+/, shift, 2;
+=pod
+  my ($name,$message) = split '  ', shift, 2; # NOTE: two spaces
+  if($name eq ' *'){
+    $name=substr($_[2],index($_[2],' *')+3);
+    $message=substr($name,index($name,' '));
+    $name=substr($name,0,index($name,' '));
+  }
+
+  # clean up content for display
+  $message =~ s/  //;
+  $name =~ s/@|\+//;
+=cut
+
+  my @command_parts = grep{ length } @settings{ 'command'
+                                              , 'command-opts'
+                                              , $type.'_urgency'
+                                              , $type.'_expire'
+                                              , 'summary'
+                                              , 'notification'
+                                              }
+                      ;
+  for (-2,-1){
+    $command_parts[$_] =~ s/\$name/$name/g;
+    $command_parts[$_] =~ s/\$type/$type/g;
+    $command_parts[$_] =~ s/\$message/$message/g;
+  }
+
+  return weechat::WEECHAT_RC_OK 
+    if system(@command_parts) == 0;
+  return weechat::WEECHAT_RC_ERROR
+}
